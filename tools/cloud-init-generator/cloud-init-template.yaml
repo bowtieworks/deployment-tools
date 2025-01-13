@@ -1,0 +1,37 @@
+#cloud-config
+fqdn: {{ CONTROLLER_HOSTNAME }}
+hostname: {{ CONTROLLER_HOSTNAME }}
+preserve_hostname: false
+prefer_fqdn_over_hostname: true
+write_files:
+# start sso block #
+- path: /etc/dex/sso.yaml
+  content: |
+    {{ DEX_SSO_CONFIG }}
+# end sso block #
+- path: /etc/bowtie-server.d/custom.conf
+  content: |
+    SITE_ID={{ SITE_ID }}
+    BOWTIE_SYNC_PSK={{ SYNC_PSK }}
+# start init-users block #
+- path: /var/lib/bowtie/init-users
+  content: |
+    {{ INIT_USER_CREDENTIALS }}
+# end init-users block #
+# start should-join block #
+- path: /var/lib/bowtie/should-join.conf
+  content: |
+    entrypoint = {{ FIRST_CONTROLLER_HOSTNAME }}
+# end should-join block #
+- path: /var/lib/bowtie/skip-gui-init
+- path: /etc/update-at
+users:
+- name: root
+  # start ssh key block #
+  ssh_authorized_keys:
+  - {{ PUBLIC_SSH_KEY }}
+  # end ssh key block #
+  lock_passwd: false
+  # start root password block #
+  hashed_passwd: {{ HASHED_PASSWORD }}
+  # end root password block #

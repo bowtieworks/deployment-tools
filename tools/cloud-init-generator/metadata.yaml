@@ -1,0 +1,16 @@
+instance-id: {{CONTROLLER HOSTNAME}}
+local-hostname: {{CONTROLLER HOSTNAME}}
+network:
+  version: 2
+  ethernets:
+    {{NIC_NAME}}:
+      dhcp4: false
+      addresses:
+        - {{STATIC_IPV4_IP}}/24
+      nameservers:
+        addresses:
+          - 1.1.1.1
+      routes:
+        - to: 0.0.0.0/0
+          via: {{GATEWAY_IPV4_IP}}
+network.encoding: base64
