@@ -1,0 +1,12 @@
+type: oidc
+id: entra
+name: Microsoft Entra ID
+config:
+  issuer: {{ ISSUER_URL }}
+  clientID: {{ CLIENT_ID }}
+  clientSecret: {{ CLIENT_SECRET }}
+  redirectURI: $DEX_ORIGIN/dex/callback
+  scopes:
+    - openid
+    - profile
+    - email

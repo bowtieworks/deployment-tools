@@ -11,7 +11,9 @@ TEMPLATES_DIR = "./dex_templates"
 DEX_CONNECTORS = {
     "github": "github_connector.yaml",
     "gitlab": "gitlab_connector.yaml",
+    "entra": "entra_connector.yaml",
     "google": "google_connector.yaml",
+    "pingid": "pingid_connector.yaml",
     "oidc": "oidc_connector.yaml",
     "saml": "saml_connector.yaml",
 }
@@ -98,43 +100,124 @@ def replace_placeholders_in_template(template, user_data):
         template = template.replace(f"{{{{ {key} }}}}", value)
     return template
 
-def format_sso_config(template):
-    lines = template.split('\n')
-    formatted = []
-    # this is for indentation purposes
-    noindent = "" 
-    indent = "    "  
-    configindent = "      " 
-    in_list = False
-
+def format_template_for_cloud_init(template_content):
+    lines = [line for line in template_content.split('\n') if line.strip()]
+    
+    formatted_lines = []
+    
+    # Define states for different sections of the document
+    TOP_LEVEL = 'top'
+    CONFIG = 'config'
+    SCOPES = 'scopes'
+    CLAIM_MAPPING = 'claim_mapping'
+    
+    current_state = TOP_LEVEL
+    
     for line in lines:
         stripped = line.strip()
-        if ':' in stripped:
-            key, value = stripped.split(':', 1)
-            key = key.strip()
-            value = value.strip()
-
-            if key == 'type':
-                formatted.append(f"{noindent}{key}: {value}")
-                in_list = False
-            elif key in ['id', 'name']:
-                formatted.append(f"{indent}{key}: {value}")
-                in_list = False
-            elif key == 'config':
-                formatted.append(f"{indent}{key}:")
-                in_list = False
-            elif key == 'groups':
-                formatted.append(f"{configindent}{key}:")
-                in_list = True
+        
+        # Determine the new state based on the line content
+        if stripped.startswith('type:'):
+            current_state = TOP_LEVEL
+        elif stripped.startswith('config:'):
+            current_state = CONFIG
+        elif stripped.startswith('scopes:'):
+            current_state = SCOPES
+        elif stripped.startswith('claimMapping:'):
+            current_state = CLAIM_MAPPING
+        # If we're in the SCOPES state and encounter a line that doesn't start with '-',
+        # we've left the scopes section
+        elif current_state == SCOPES and not stripped.startswith('-'):
+            current_state = CONFIG
+        # Special check for when we leave the claim_mapping section
+        elif current_state == CLAIM_MAPPING and (
+            stripped.startswith('userIDKey:') or 
+            stripped.startswith('userNameKey:') or
+            not ':' in stripped
+        ):
+            current_state = CONFIG
+        
+        # Apply indentation based on the current state
+        if current_state == TOP_LEVEL:
+            formatted_lines.append(stripped)
+        elif current_state == CONFIG:
+            if stripped.startswith('config:'):
+                formatted_lines.append(stripped)
             else:
-                formatted.append(f"{configindent}{key}: {value}")
-                in_list = False
-        elif stripped.startswith('-') and in_list:
-            formatted.append(f"{configindent}  {stripped}")
-        elif stripped and in_list:
-            formatted.append(f"{configindent}  - {stripped}")
+                formatted_lines.append('  ' + stripped)
+        elif current_state == SCOPES:
+            if stripped.startswith('scopes:'):
+                formatted_lines.append('  ' + stripped)
+            else:  # List items
+                formatted_lines.append('    ' + stripped)
+        elif current_state == CLAIM_MAPPING:
+            if stripped.startswith('claimMapping:'):
+                formatted_lines.append('  ' + stripped)
+            else:  # Items under claimMapping
+                formatted_lines.append('    ' + stripped)
+    
+    return formatted_lines
 
-    return '\n'.join(formatted)
+def replace_sso_block_in_cloud_init(cloud_config, formatted_lines):
+    sso_block = f"""- path: /etc/dex/sso.yaml
+  content: |
+    {formatted_lines[0]}
+    {formatted_lines[1]}
+    {formatted_lines[2]}
+    {formatted_lines[3]}"""
+    
+    for i in range(4, len(formatted_lines)):
+        sso_block += f"\n    {formatted_lines[i]}"
+    
+    cloud_lines = cloud_config.split('\n')
+    
+    sso_start = -1
+    sso_end = -1
+    
+    for i, line in enumerate(cloud_lines):
+        if '- path: /etc/dex/sso.yaml' in line:
+            sso_start = i
+            for j in range(i + 1, len(cloud_lines)):
+                if cloud_lines[j].strip().startswith('- path:'):
+                    sso_end = j
+                    break
+            break
+    
+    if sso_start == -1:
+        return cloud_config
+    
+    if sso_end == -1:
+        for j in range(sso_start + 1, len(cloud_lines)):
+            if not cloud_lines[j].startswith(' '):
+                sso_end = j
+                break
+        
+        if sso_end == -1:
+            sso_end = len(cloud_lines)
+    
+    result = cloud_lines[:sso_start] + sso_block.split('\n') + cloud_lines[sso_end:]
+    return '\n'.join(result)
+
+def handle_template_sso(cloud_config, connector_key, replacements):
+    connector_template = load_template(connector_key)
+    
+    if connector_template is None:
+        print(f"Failed to load template for {connector_key}")
+        return cloud_config, replacements
+    
+    placeholders = extract_placeholders(connector_template)
+    user_data = gather_user_input_for_placeholders(placeholders)
+    
+    filled_template = replace_placeholders_in_template(connector_template, user_data)
+    
+    formatted_lines = format_template_for_cloud_init(filled_template)
+    
+    modified_config = replace_sso_block_in_cloud_init(cloud_config, formatted_lines)
+    
+    if 'DEX_SSO_CONFIG' in replacements:
+        del replacements['DEX_SSO_CONFIG']
+    
+    return modified_config, replacements
 
 def main(args):
     with open(args.input, 'r') as file:
@@ -158,19 +241,13 @@ def main(args):
 
     if get_user_input("Use SSO for user authentication? (y/n): ").lower() == 'y':
         connector_key = list_dex_connectors()
-        connector_template = load_template(connector_key)
-        if connector_template is None:
-            print("Failed to load the selected Dex connector template; proceeding without SSO configuration.")
-            replacements['DEX_SSO_CONFIG'] = ""
-        elif connector_key == "none":
-            print("Entering a placeholder for manaul SSO insertion.")
+        
+        if connector_key == "none":
+            print("Entering a placeholder for manual SSO insertion.")
             replacements['DEX_SSO_CONFIG'] = "{{ DEX_SSO_CONFIG }}"
         else:
-            placeholders = extract_placeholders(connector_template)
-            user_data = gather_user_input_for_placeholders(placeholders)
-            filled_template = replace_placeholders_in_template(connector_template, user_data)
-            formatted_sso_config = format_sso_config(filled_template)
-            replacements['DEX_SSO_CONFIG'] = formatted_sso_config
+            # Use the template-based SSO handler
+            cloud_config, replacements = handle_template_sso(cloud_config, connector_key, replacements)
     else:
         cloud_config = remove_block(cloud_config, 'sso')
 

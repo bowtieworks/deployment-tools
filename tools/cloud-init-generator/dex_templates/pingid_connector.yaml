@@ -1,0 +1,18 @@
+type: oidc
+id: pingidentity
+name: Ping Identity
+config:
+  issuer: {{ ISSUER_URL }}
+  clientID: {{ CLIENT_ID }}
+  clientSecret: {{ CLIENT_SECRET }}
+  redirectURI: $DEX_ORIGIN/dex/callback
+  scopes:
+    - openid
+    - profile
+    - email
+  userIDKey: sub
+  userNameKey: preferred_username
+  claimMapping:
+    email: email
+    groups: groups
+    name: name
