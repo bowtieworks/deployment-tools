@@ -15,7 +15,7 @@ This tool aims at making the process of constructing a well-formed cloud-init fi
 ## Setup and Usage
 
 - Clone repository
-- Install dependencies: `pip install argon2-cffi`
+- Install dependencies: `pip3 install argon2-cffi`
 - Run the script: `python3 create-cloud-init.py --input cloud-init-template.yaml`
 
 ## Inputs

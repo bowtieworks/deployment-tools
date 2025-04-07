@@ -7,10 +7,8 @@ network:
       dhcp4: false
       addresses:
         - {{ STATIC_IPV4_IP }}/24
+      gateway4: {{ GATEWAY_IPV4_IP }}  
       nameservers:
         addresses:
           - 1.1.1.1
-      routes:
-        - to: 0.0.0.0/0
-          via: {{ GATEWAY_IPV4_IP }}
 network.encoding: base64
