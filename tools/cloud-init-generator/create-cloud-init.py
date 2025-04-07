@@ -3,7 +3,10 @@ import argparse
 import os
 import subprocess
 import getpass
-import readline
+try:
+    import readline
+except ImportError:
+    pass  # readline is not available, proceed without it
 import uuid
 
 # Define templates directory and Dex connectors
@@ -58,9 +61,21 @@ def remove_comments(content):
     return "\n".join(line for line in lines if not line.strip().startswith('#') or line.strip() == '#cloud-config')
 
 def generate_init_user_credentials(email, password):
-    script_path = os.path.abspath('./generate-hash.sh')
-    result = subprocess.run([script_path, email, password], capture_output=True, text=True)
-    return next((line for line in result.stdout.splitlines() if line.startswith(email)), None)
+    try:
+        import argon2
+    except ImportError:
+        print("Error: argon2-cffi is not installed. Please install it using 'pip install argon2-cffi'")
+        exit(1)
+    
+    ph = argon2.PasswordHasher(
+        time_cost=3,
+        memory_cost=4096,
+        parallelism=1,
+        hash_len=32,
+        type=argon2.Type.I
+    )
+    hash_str = ph.hash(password)
+    return f"{email}:{hash_str}"
 
 def format_entrypoint(entrypoint):
     entrypoint = entrypoint.strip('"')

@@ -10,12 +10,12 @@ This tool aims at making the process of constructing a well-formed cloud-init fi
 
 - Python 3.6 or higher
 - `pip` python package manager
-- `argon2`
+- `argon2-cffi` 
 
 ## Setup and Usage
 
 - Clone repository
-- Ensure included shell script is executable: `chmod +x generate-hash.sh`
+- Install dependencies: `pip install argon2-cffi`
 - Run the script: `python3 create-cloud-init.py --input cloud-init-template.yaml`
 
 ## Inputs
