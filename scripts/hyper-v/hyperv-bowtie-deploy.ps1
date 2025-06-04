@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Deploys the VM with three modes:
-    1. NAT with static IP (cloud-init) and host-level port forwarding.
-    2. External switch with static IP (cloud-init).
-    3. External switch with DHCP (no cloud-init).
+    1. NAT with static IP and host-level port forwarding.
+    2. External switch with static IP.
+    3. External switch with DHCP.
     Always decompresses the .gz file, overwriting the VHDX. Logs to 'deploy-vm.log'.
 
 .PARAMETER gzPath
@@ -29,8 +29,8 @@
     Network mode: 'nat-static-portfwd', 'ext-switch-static', or 'ext-switch-dhcp'.
 .PARAMETER existingSwitchName
     Name of existing virtual switch (for ext-switch modes).
-.PARAMETER staticIP
-    Static IP in CIDR (e.g., "192.168.100.222/24" for NAT, "10.0.1.222/24" for ext-switch).
+.PARAMETER vmStaticIP
+    Static IP in CIDR.
 .PARAMETER natNetworkName
     NAT network name (for nat-static-portfwd, default: PrivateNAT).
 .PARAMETER natSwitchName
@@ -41,24 +41,6 @@
     NAT subnet (for nat-static-portfwd, default: 192.168.100.0/24).
 .PARAMETER nameServer
     DNS server IP (default: 8.8.8.8).
-
-.EXAMPLE
-    # NAT with static IP and port forwarding (ie metal on AWS)
-    .\bowtie-hyperv.ps1 -gzPath "C:\Downloads\bowtie.vhdx.gz" -vhdxPath "C:\VMs\bowtie.vhdx" -vmName "BowtieController" -networkMode nat-static-portfwd -staticIP "192.168.100.222/24"
-
-.EXAMPLE
-    # External switch with static IP (on-premises)
-    .\bowtie-hyperv.ps1 -gzPath "C:\Downloads\bowtie.vhdx.gz" -vhdxPath "C:\VMs\bowtie.vhdx" -vmName "BowtieController" -networkMode ext-switch-static -existingSwitchName "External Virtual Switch" -staticIP "10.0.1.222/24"
-
-.EXAMPLE
-    # External switch with DHCP (on-premises)
-    .\bowtie-hyperv.ps1 -gzPath "C:\Downloads\bowtie.vhdx.gz" -vhdxPath "C:\VMs\bowtie.vhdx" -vmName "BowtieController" -networkMode ext-switch-dhcp -existingSwitchName "External Virtual Switch"
-
-.NOTES
-    - Requires Hyper-V and Administrator privileges.
-    - Windows ADK (oscdimg.exe) needed for cloud-init ISO (modes 1 and 2).
-    - Logs to 'deploy-vm.log'.
-    - For cloud-based metal, use nat-static-portfwd. For on-premises, use ext-switch-static or ext-switch-dhcp; port forwarding should be handled at the network edge.
 #>
 
 [CmdletBinding()]
@@ -93,7 +75,7 @@ param (
 
     [string]$existingSwitchName,
 
-    [string]$staticIP,
+    [string]$vmStaticIP,
 
     [string]$natNetworkName = "PrivateNAT",
 
@@ -160,10 +142,38 @@ if ($networkMode -in "ext-switch-static", "ext-switch-dhcp" -and -not $existingS
     exit 1
 }
 
-if ($networkMode -in "nat-static-portfwd", "ext-switch-static" -and -not ($staticIP -match "^\d+\.\d+\.\d+\.\d+/\d+$")) {
-    Write-Host "Error: Valid staticIP required for ${networkMode}."
-    Write-Log "Valid staticIP (e.g., 192.168.100.222/24) required for ${networkMode}." -Level "ERROR"
+if ($networkMode -in "nat-static-portfwd", "ext-switch-static" -and -not ($vmStaticIP -match "^\d+\.\d+\.\d+\.\d+/\d+$")) {
+    Write-Host "Error: Valid vmStaticIP required for ${networkMode}."
+    Write-Log "Valid vmStaticIP (e.g., 192.168.100.222/24) required for ${networkMode}." -Level "ERROR"
     exit 1
+}
+
+if ($networkMode -eq "nat-static-portfwd") {
+    if (-not $natSubnetPrefix -or -not ($natSubnetPrefix -match "^\d+\.\d+\.\d+\.\d+/\d+$")) {
+        Write-Host "Error: Valid natSubnetPrefix (e.g., 192.168.100.0/24) is required for nat-static-portfwd."
+        Write-Log "Invalid or missing natSubnetPrefix for nat-static-portfwd." -Level "ERROR"
+        exit 1
+    }
+
+    # Validate natGatewayIP is within natSubnetPrefix
+    try {
+        $subnet = $natSubnetPrefix.Split('/')[0]
+        $prefixLength = $natSubnetPrefix.Split('/')[1]
+        $subnetBytes = [System.Net.IPAddress]::Parse($subnet).GetAddressBytes()
+        $gatewayBytes = [System.Net.IPAddress]::Parse($natGatewayIP).GetAddressBytes()
+        $mask = [uint32]([math]::Pow(2, 32) - [math]::Pow(2, 32 - $prefixLength))
+        $subnetInt = [System.BitConverter]::ToUInt32($subnetBytes[3..0], 0)
+        $gatewayInt = [System.BitConverter]::ToUInt32($gatewayBytes[3..0], 0)
+        if (($subnetInt -band $mask) -ne ($gatewayInt -band $mask)) {
+            Write-Host "Error: natGatewayIP must be within natSubnetPrefix (${natSubnetPrefix})."
+            Write-Log "natGatewayIP (${natGatewayIP}) must be within natSubnetPrefix (${natSubnetPrefix})." -Level "ERROR"
+            exit 1
+        }
+    } catch {
+        Write-Host "Error: Failed to validate natSubnetPrefix."
+        Write-Log "Exception during subnet validation: $($_.Exception.Message)" -Level "ERROR"
+        exit 1
+    }
 }
 
 # Decompress GZ file
@@ -245,38 +255,6 @@ if ($networkMode -eq "nat-static-portfwd") {
     }
 }
 
-# Configure port forwarding for NAT mode
-if ($networkMode -eq "nat-static-portfwd") {
-    Write-Host "Setting up port forwarding..."
-    $internalIP = $staticIP.Split('/')[0]
-    $portMappings = @(
-        @{ ExternalPort = 443; InternalPort = 443; Protocol = "TCP" },
-        @{ ExternalPort = 443; InternalPort = 443; Protocol = "UDP" },
-        @{ ExternalPort = 80; InternalPort = 80; Protocol = "TCP" }
-    )
-    try {
-        foreach ($mapping in $portMappings) {
-            $existing = Get-NetNatStaticMapping -NatName $natNetworkName -ErrorAction SilentlyContinue |
-                Where-Object { $_.ExternalPort -eq $mapping.ExternalPort -and $_.Protocol -eq $mapping.Protocol }
-            if ($existing) {
-                Remove-NetNatStaticMapping -NatName $natNetworkName -ExternalPort $mapping.ExternalPort -Protocol $mapping.Protocol -ErrorAction Stop
-            }
-            Add-NetNatStaticMapping -ExternalIPAddress "0.0.0.0" `
-                -ExternalPort $mapping.ExternalPort `
-                -Protocol $mapping.Protocol `
-                -InternalIPAddress $internalIP `
-                -InternalPort $mapping.InternalPort `
-                -NatName $natNetworkName -ErrorAction Stop
-            Write-Log "Added NAT mapping: $($mapping.ExternalPort)/$($mapping.Protocol) to ${internalIP}:$($mapping.InternalPort)"
-        }
-        $natMappings = Get-NetNatStaticMapping -NatName $natNetworkName
-        Write-Log "NAT mappings:`n$($natMappings | Format-Table | Out-String)"
-    } catch {
-        Write-Host "Warning: Port forwarding setup failed."
-        Write-Log "Port forwarding failed: $($_.Exception.Message)" -Level "WARNING"
-    }
-}
-
 # Create cloud-init ISO if needed
 if ($networkMode -in "nat-static-portfwd", "ext-switch-static") {
     Write-Host "Creating cloud-init ISO..."
@@ -288,7 +266,7 @@ network:
   ethernets:
     eth0:
       addresses:
-        - $staticIP
+        - $vmStaticIP
       gateway4: $natGatewayIP
       nameservers:
         addresses: [$nameServer]
@@ -315,7 +293,7 @@ network:
         Write-Host "Error: Cloud-init ISO failed."
         Write-Log "Cloud-init ISO failed: $($_.Exception.Message)" -Level "ERROR"
         Clean-Up -vmName $vmName -isoDir $isoDir -vhdxPath $vhdxPath -natNetworkName $natNetworkName
-        exit 1
+            exit 1
     }
 }
 
@@ -365,28 +343,54 @@ try {
 # Configure port forwarding for NAT mode
 if ($networkMode -eq "nat-static-portfwd") {
     Write-Host "Setting up port forwarding..."
-    $internalIP = $staticIP.Split('/')[0]
+    $internalIP = $vmStaticIP.Split('/')[0]
     $portMappings = @(
         @{ ExternalPort = 443; InternalPort = 443; Protocol = "TCP" },
         @{ ExternalPort = 443; InternalPort = 443; Protocol = "UDP" },
-        @{ ExternalPort = 80; InternalPort = 80; Protocol = "TCP" }
+        @{ ExternalPort = 80;  InternalPort = 80;  Protocol = "TCP" }
     )
-    try {
-        foreach ($mapping in $portMappings) {
+
+    foreach ($mapping in $portMappings) {
+        try {
             $existing = Get-NetNatStaticMapping -NatName $natNetworkName -ErrorAction SilentlyContinue |
                 Where-Object { $_.ExternalPort -eq $mapping.ExternalPort -and $_.Protocol -eq $mapping.Protocol }
-            if ($existing) { continue }
+
+            if ($existing) {
+                Remove-NetNatStaticMapping -NatName $natNetworkName `
+                    -ExternalPort $mapping.ExternalPort `
+                    -Protocol $mapping.Protocol `
+                    -ErrorAction Stop
+                Write-Log "Removed existing mapping on port $($mapping.ExternalPort)/$($mapping.Protocol)"
+            }
+
+            # Optional: Pre-check if port is already bound on host
+            if ($mapping.Protocol -eq "TCP" -and (Get-NetTCPConnection -LocalPort $mapping.ExternalPort -ErrorAction SilentlyContinue)) {
+                Write-Log "TCP port $($mapping.ExternalPort) already in use on host. Skipping." -Level "WARNING"
+                continue
+            }
+            if ($mapping.Protocol -eq "UDP" -and (Get-NetUDPEndpoint | Where-Object { $_.LocalPort -eq $mapping.ExternalPort })) {
+                Write-Log "UDP port $($mapping.ExternalPort) already in use on host. Skipping." -Level "WARNING"
+                continue
+            }
+
             Add-NetNatStaticMapping -ExternalIPAddress "0.0.0.0" `
                 -ExternalPort $mapping.ExternalPort `
                 -Protocol $mapping.Protocol `
                 -InternalIPAddress $internalIP `
                 -InternalPort $mapping.InternalPort `
                 -NatName $natNetworkName -ErrorAction Stop
+
             Write-Log "Added NAT mapping: $($mapping.ExternalPort)/$($mapping.Protocol) to ${internalIP}:$($mapping.InternalPort)"
+        } catch {
+            Write-Log "Failed to add mapping $($mapping.ExternalPort)/$($mapping.Protocol): $($_.Exception.Message)" -Level "WARNING"
         }
+    }
+
+    try {
+        $natMappings = Get-NetNatStaticMapping -NatName $natNetworkName
+        Write-Log "Current NAT mappings:`n$($natMappings | Format-Table | Out-String)"
     } catch {
-        Write-Host "Warning: Port forwarding setup failed."
-        Write-Log "Port forwarding failed: $($_.Exception.Message)" -Level "WARNING"
+        Write-Log "Failed to retrieve NAT mappings: $($_.Exception.Message)" -Level "WARNING"
     }
 }
 
