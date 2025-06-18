@@ -1,10 +1,10 @@
 # Bowtie LXD Deployment
 
-Steps for deploying a Bowtie controller on LXD.
+Steps for deploying a Bowtie Controller on an LXD environment.
 
-## Setup Process
+## Setup process
 
-### 1. Prepare the LXD Environment
+### 1. Prepare the LXD environment
 
 ```bash
 # Update the system
@@ -28,7 +28,7 @@ lxc network list
 # Note the IPv4 address of the new bridge interface (e.g., 10.157.207.1/24)
 ```
 
-### 2. Configure Cloud-Init and Network-Config
+### 2. Configure cloud-init and network-config
 
 [Create a cloud-init configuration file](https://github.com/bowtieworks/deployment-tools/tree/main/tools/cloud-init-generator) and save it as (`cloud-init.yaml`) on your host VM.
 
@@ -47,21 +47,15 @@ ethernets:
         - 1.1.1.1 # Replace with preferred resolver to be used
 ```
 
-If port forwarding is required on the host VM, set a static IP in the default profile:
+### 3. Download and prepare the Bowtie image
 
 ```bash
-# Replace with static IP to be assigned to the instance
-lxc profile device set default eth0 ipv4.address=10.157.207.100
-```
-
-### 3. Download and Prepare the Bowtie Image
-
-```bash
-# Download the latest Bowtie controller image
-wget -O bowtie-controller-qcow-efi-25.03.003.qcow2.gz https://api.bowtie.works/api/v1/package/4337/download/
+# Download the latest Bowtie controller image (https://api.bowtie.works/platforms/KVM)
+# Be sure to use "qcow-efi"
+wget -O bowtie-controller-qcow-efi-25.06.002.qcow2.gz "https://api.bowtie.works/api/v1/package/4657/download/"
 
 # Decompress the image
-gunzip bowtie-controller-qcow-efi-25.03.003.qcow2.gz
+gunzip bowtie-controller-qcow-efi-25.06.002.qcow2.gz
 ```
 
 Create a metadata file (`metadata.yaml`):
@@ -72,7 +66,7 @@ creation_date: 1743127808
 properties:
   description: Bowtie Controller
   os: linux
-  release: 25.03.03
+  release: 25.06.002
 ```
 
 Package and import the image:
@@ -82,20 +76,20 @@ Package and import the image:
 tar -cf metadata.tar metadata.yaml
 
 # Import the VM image
-lxc image import metadata.tar bowtie-controller-qcow-efi-25.03.003.qcow2 --alias bowtie
+lxc image import metadata.tar bowtie-controller-qcow-efi-25.06.002.qcow2 --alias bowtie-controller-image
 ```
 
-### 4. Create and Configure the VM
+### 4. Create and configure the VM
 
 ```bash
 # Initialize the VM with 2 CPUs and 4GB memory
-lxc init bowtie bowtie-vm --vm -c limits.cpu=2 -c limits.memory=4GB -s default
+lxc init bowtie-controller-image bowtie-vm --vm -c limits.cpu=2 -c limits.memory=4GB -s default
 
 # Disable secure boot
 lxc config set bowtie-vm security.secureboot false
 
 # Apply cloud-init configuration
-lxc config set bowtie-vm cloud-init.user-data - < cloud-init.yaml
+incus config set bowtie-vm cloud-init.user-data - < user-data.yaml
 
 # Apply network configuration (if using static IP)
 lxc config set bowtie-vm cloud-init.network-config - < network-config.yaml
@@ -107,9 +101,9 @@ lxc config device add bowtie-vm config disk source=cloud-init:config
 lxc config show bowtie-vm
 ```
 
-### 5. Start and Access the VM
+### 5. Start and access the VM
 
-#### Option A: With External Port Forwarding
+#### Option A: With external port forwarding
 
 ```bash
 # Start the VM
@@ -118,15 +112,22 @@ lxc start bowtie-vm
 # Configure ports on external firewall/ingress
 ```
 
-#### Option B: With Host VM Port Forwarding
+#### Option B: With host-level port forwarding
+
+Assign the static IP to the device:
+
+```bash
+# Replace with static IP to be assigned to the instance
+lxc profile device set default eth0 ipv4.address=10.157.207.100
+```
+
+Configure port forwarding rules:
 
 ```bash
 # Find the host's internal IP address (10.128.0.4 in this case)
 ip route show
 # Example output:
 # default via 10.128.0.1 dev ens4 proto dhcp src 10.128.0.4 metric 100
-# 10.128.0.1 dev ens4 proto dhcp scope link src 10.128.0.4 metric 100
-# 10.157.207.0/24 dev lxdbr0 proto kernel scope link src 10.157.207.1 linkdown
 
 # Set up TCP proxy for HTTPS (443)
 lxc config device add bowtie-vm https-tcp proxy listen=tcp:10.128.0.4:443 connect=tcp:10.157.207.100:443 nat=true
@@ -141,7 +142,7 @@ lxc config device add bowtie-vm ssh proxy listen=tcp:10.128.0.4:2222 connect=tcp
 lxc start bowtie-vm
 ```
 
-## Verification and Troubleshooting
+## Verification and troubleshooting
 
 After deployment, you can verify the VM status with:
 
@@ -149,6 +150,6 @@ After deployment, you can verify the VM status with:
 # Check VM status
 lxc list
 
-# View VM logs
+# View serial console
 lxc console bowtie-vm
 ```
