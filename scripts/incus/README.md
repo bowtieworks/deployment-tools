@@ -31,21 +31,32 @@ incus network list
 
 ### 2. Configure cloud-init and network-config
 
-[Create a cloud-init configuration file](https://github.com/bowtieworks/deployment-tools/tree/main/tools/cloud-init-generator) and save it as (`cloud-init.yaml`) on your host VM.
+Creating and applying a `user-data` configuration file to cloud-init is entirely optional. This is primarily useful for supplying a public SSH key for console access or if preferring to configure the instance from code directly. If a `user-data` configuration is desired, you can use the [cloud-init-generator](https://github.com/bowtieworks/deployment-tools/tree/main/tools/cloud-init-generator) tool to generate a well-formed `user-data` file, or if only wanting to supply a public ssh key, you can copy the below template and replace the sample SSH key with your own. 
 
-If needing static IP assignment (no DHCP available), create a network configuration file at `network-config.yaml`:
+```yaml
+#cloud-config
+users:
+- name: root
+  ssh_authorized_keys:
+  - ssh-ed25519 AAAA example_public_ssh_key
+  lock_passwd: false
+```
+
+If created, save the `user-data` as `user-data.yaml`.
+
+Creating and applying a `network-config` file is **necessary** for static IP assignment. Unless otherwise preferred, copy the below template, modify it's values according to the comments below, and then save it as `network-config.yaml`. 
 
 ```yaml
 version: 2
 ethernets:
-  eth0:
+  enp5s0:
     dhcp4: false
     addresses:
-      - 10.89.113.100/24 # Replace with static IP from the CIDR assigned to the bridge interface
+      - 10.89.113.100/24 # Replace with any static IP from the CIDR assigned to the bridge interface
     gateway4: 10.89.113.1 # Replace with gateway assigned to bridge interface
     nameservers:
       addresses:
-        - 1.1.1.1 # Replace with preferred resolver to be used
+        - 1.1.1.1 # Replace with preferred public resolver to be used
 ```
 
 ### 3. Download and prepare the Bowtie image
@@ -71,13 +82,13 @@ incus init bowtie-controller-image bowtie-vm --vm -c limits.cpu=2 -c limits.memo
 # Disable secure boot
 incus config set bowtie-vm security.secureboot false
 
-# Apply user-data (if user-data is needed)
+# If utilizing user-data, apply user-data to cloud-init configuration
 incus config set bowtie-vm cloud-init.user-data - < user-data.yaml
 
-# Apply network-config
+# If assigning a static IP, apply network-config to cloud-init configuration
 incus config set bowtie-vm cloud-init.network-config - < network-config.yaml
 
-# Attach cloud-init disk to devices
+# Attach the bundled cloud-init configuration
 incus config device add bowtie-vm config disk source=cloud-init:config
 
 # Validate VM configuration
@@ -112,14 +123,14 @@ ip route show
 # Example output:
 # default via 10.128.0.1 dev ens4 proto dhcp src 10.128.0.4 metric 100
 
-# Set up TCP proxy for HTTPS (443)
-incus config device add bowtie-vm https-tcp proxy listen=tcp:10.128.0.4:443 connect=tcp:10.89.113.100:443 nat=true
+# Create network forwarder
+lxc network forward create <bridge_interface> 10.128.0.4
 
-# Set up UDP proxy for WG (443)
-incus config device add bowtie-vm wg-udp proxy listen=udp:10.128.0.4:443 connect=udp:10.89.113.100:443 nat=true
+# Configure TCP/443 forwarding, replacing host IP and static IP assigned to VM
+lxc network forward port add <bridge_interface> 10.128.0.4 tcp 443 10.89.113.100
 
-# Optional: Set up SSH proxy (port 2222)
-incus config device add bowtie-vm ssh proxy listen=tcp:10.128.0.4:2222 connect=tcp:10.89.113.100:22 nat=true
+# Configure UDP/443 forwarding, replacing host IP and static IP assigned to VM
+lxc network forward port add <bridge_interface> 10.128.0.4 udp 443 10.89.113.100
 
 # Start the VM
 incus start bowtie-vm
@@ -136,3 +147,7 @@ incus list
 # View serial console
 incus console bowtie-vm
 ```
+
+## Additional notes
+- If accessing the console, try to do so immediately after booting the VM. If upon doing so and no logs are visible, restart the VM and hit the console access command thereafter
+- While both approaches are viable, and up to the administrator to decide which route is preferred, the above instructions generally assume the VM is being assigned an IP from a bridge interface, rather than being assigned an address via DHCP on the same LAN as the host machine
