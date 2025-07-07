@@ -7,7 +7,7 @@ Steps to configure user authentication on Bowtie with Rippling SSO
 
 1. Visit Rippling Dashboard
 2. Select `IT` > `Third Party Access` > `Add Integration` > `Create new custom integration`
-4. Fill out app registration details, can use [attached svg](/rippling/bowtie.svg) if desired for SSO logo image
+4. Fill out app registration details, can use [attached svg](bowtie.svg) if desired for SSO logo image
 5. Select `Single Sign On (SAML)` for the app type, mark `JIT Provisioning` if not pre-provisioning users via SCIM or other means
 6. Complete setup wizard until `SSO setup instructions` page
 7. Copy the `Single Sign-on URL or Target URL` and paste it over `{{ SSO_URL }}` in the template below
