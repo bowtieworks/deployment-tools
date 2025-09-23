@@ -33,46 +33,44 @@ sudo reboot
 
 *Note: There will be several prompts during installation, in all cases opt for using the existing installation packages rather than those provided by the update.*
 
-
-
 After reboot, access the UI: **[https://public-ip:8006](https://public-ip:8006)**
 
 Login as `root`
 
 *Note: You will likely need to set a password for root: `sudo passwd root`*
 
-## Restore & Configure the VM
+## Initializing the Bowtie Controller VM
 
-First, upload or SCP the vma to the local storage: 
+The Bowtie image for Proxmox is a `.vma.zst`, which is used through the "restore VM" option, opposed to creating anew. Unfortuantely, Proxmox doesn't allow for uploading `.vma.zst` through the UI, so it must be `rsync`'d or `scp`'d to the host filesystem and then placed under `/var/lib/vz/dump/`.
 
-`scp vzdump-qemu-*.vma.zst root@<instance-ip>:/var/lib/vz/dump/`
+`scp ~/Downloads/vzdump-qemu-bowtie-controller-25.08.002.vma.zst root@192.168.86.241:/var/lib/vz/dump/`
 
-Then, create and run this setup script (replace variables as needed):
+Once pushed, the following script can be run (or run as individual commands) to stand up a networking bridge, create and attach the cloud-init network file, configure host-level port forwarding, and then start the VM:
 
 ```bash
 #!/bin/bash
 
 # === 1. Create vmbr1 bridge (for private NAT) ===
-cat <<EOF | sudo tee -a /etc/network/interfaces
+cat <<EOF | tee -a /etc/network/interfaces
 
 auto vmbr1
 iface vmbr1 inet static
     address 192.168.100.1/24
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
+    bridge-ports none
+    bridge-stp off
+    bridge-fd 0
 EOF
 
-sudo systemctl restart networking
+systemctl restart networking
 
 # === 2. Restore your VM from VMA backup ===
 VMID=100
-VMA_FILE="vzdump-qemu-yourvm-25.06.001.vma.zst"  # replace as needed
-sudo qmrestore /var/lib/vz/dump/$VMA_FILE $VMID
+VMA_FILE="vzdump-qemu-bowtie-controller-25.08.002.vma.zst"  # replace with your downloaded version
+qmrestore /var/lib/vz/dump/$VMA_FILE $VMID
 
 # === 3. Define static network config for cloud-init ===
 sudo mkdir -p /var/lib/vz/snippets
-cat <<EOF | sudo tee /var/lib/vz/snippets/static-network.yaml
+cat <<EOF | tee /var/lib/vz/snippets/static-network.yaml
 version: 2
 ethernets:
   ens18:
@@ -84,28 +82,26 @@ ethernets:
 EOF
 
 # === 4. Apply the cloud-init network config ===
-sudo qm set $VMID --cicustom "network=local:snippets/static-network.yaml"
-sudo qm cloudinit update $VMID
+qm set $VMID --cicustom "network=local:snippets/static-network.yaml"
+qm cloudinit update $VMID
 
 # === 5. Update NIC to use vmbr1 bridge ===
-sudo qm set $VMID --net0 virtio,bridge=vmbr1,firewall=0
+qm set $VMID --net0 virtio,bridge=vmbr1,firewall=0
 
 # === 6. Add port forwarding from AWS host to VM ===
-sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.100.10:443
-sudo iptables -t nat -A PREROUTING -p udp --dport 443 -j DNAT --to-destination 192.168.100.10:443
-sudo iptables -t nat -A POSTROUTING -s 0.0.0.0/0 -d 192.168.100.0/24 -j MASQUERADE
+iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.100.10:443
+iptables -t nat -A PREROUTING -p udp --dport 443 -j DNAT --to-destination 192.168.100.10:443
+iptables -t nat -A POSTROUTING -s 0.0.0.0/0 -d 192.168.100.0/24 -j MASQUERADE
 
 # === 7. Persist iptables across reboots ===
-sudo apt-get install -y iptables-persistent
-sudo netfilter-persistent save
+apt-get install -y iptables-persistent
+netfilter-persistent save
 
 # === 8. Start the VM ===
-sudo qm start $VMID
+qm start $VMID
 
 echo "✅ VM $VMID started at 192.168.100.10 and port 443 is forwarded"
 ```
-
-This will stand up a networking bridge, create and attach the cloud-init network file, configure host-level port forwarding, and start the VM. 
 
 ## Misc
 Reach out to support@bowtie.works if you have any questions or need any assistance.
