@@ -41,7 +41,9 @@ Login as `root`
 
 ## Initializing the Bowtie Controller VM
 
-The Bowtie image for Proxmox is a `.vma.zst`, which is used through the "restore VM" option, opposed to creating anew. Unfortuantely, Proxmox doesn't allow for uploading `.vma.zst` through the UI, so it must be `rsync`'d or `scp`'d to the host filesystem and then placed under `/var/lib/vz/dump/`.
+You can find the latest Bowtie Controller image for Proxmox at [api.bowtie.works](https://api.bowtie.works/platforms/Proxmox). 
+
+The Proxmox Bowtie image is a `.vma.zst`, which is used through the "restore VM" option, opposed to creating anew. Unfortuantely, Proxmox doesn't allow for uploading `.vma.zst` through the UI, so it must be `rsync`'d or `scp`'d to the host filesystem and then placed under `/var/lib/vz/dump/`.
 
 `scp ~/Downloads/vzdump-qemu-bowtie-controller-25.08.002.vma.zst root@192.168.86.241:/var/lib/vz/dump/`
 
