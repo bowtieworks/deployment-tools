@@ -11,6 +11,8 @@ For the example below, we're using the `Debian 12` AMI.
 SSH into the host and run:
 
 ```bash
+sudo apt update
+
 # Add gpg
 sudo apt install gnupg
 
