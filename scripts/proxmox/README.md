@@ -11,6 +11,9 @@ For the example below, we're using the `Debian 12` AMI.
 SSH into the host and run:
 
 ```bash
+# Add gpg
+sudo apt install gnupg
+
 # Add Proxmox repo
 echo "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription" | sudo tee /etc/apt/sources.list.d/pve-install.list
 
