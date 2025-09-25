@@ -91,9 +91,11 @@ qm cloudinit update $VMID
 qm set $VMID --net0 virtio,bridge=vmbr1,firewall=0
 
 # === 6. Add port forwarding from AWS host to VM ===
-iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.100.10:443
-iptables -t nat -A PREROUTING -p udp --dport 443 -j DNAT --to-destination 192.168.100.10:443
-iptables -t nat -A POSTROUTING -s 0.0.0.0/0 -d 192.168.100.0/24 -j MASQUERADE
+iptables -t nat -A PREROUTING -i vmbr0 -p tcp --dport 443 -j DNAT --to-destination 192.168.100.10:443
+iptables -t nat -A PREROUTING -i vmbr0 -p udp --dport 443 -j DNAT --to-destination 192.168.100.10:443
+iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o vmbr0 -j MASQUERADE
+iptables -A FORWARD -i vmbr1 -o vmbr0 -j ACCEPT
+iptables -A FORWARD -i vmbr0 -o vmbr1 -j ACCEPT
 
 # === 7. Persist iptables across reboots ===
 apt-get install -y iptables-persistent
